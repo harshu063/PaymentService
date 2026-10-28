@@ -1,0 +1,20 @@
+services:
+  payment-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: payment_service
+      MYSQL_USER: payment_user
+      MYSQL_PASSWORD: ${PAYMENT_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${PAYMENT_DB_ROOT_PASSWORD}
+    ports:
+      - "3309:3306"
+    volumes:
+      - payment-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -upayment_user -p$$MYSQL_PASSWORD --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  payment-db-data:

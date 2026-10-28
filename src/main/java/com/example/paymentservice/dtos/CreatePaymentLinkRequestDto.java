@@ -1,10 +1,8 @@
 package com.example.paymentservice.dtos;
 
-import lombok.Getter;
-import lombok.Setter;
+import jakarta.validation.constraints.NotNull;
 
-@Getter
-@Setter
-public class CreatePaymentLinkRequestDto {
-    private Long orderId;
+import java.util.UUID;
+
+public record CreatePaymentLinkRequestDto(@NotNull UUID orderId) {
 }

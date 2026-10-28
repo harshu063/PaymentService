@@ -131,4 +131,40 @@ class PaymentFlowTests {
         verify(orders, times(0)).get(secondOrderId, "Bearer test");
         verify(gateway, times(1)).createCheckout(any(), eq(firstOrderId), anyLong(), anyString(), anyString());
     }
+
+    @Test
+    void ignoresLateSuccessAfterProviderAlreadyReportedFailure() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        when(orders.get(orderId, "Bearer test")).thenReturn(
+                new OrderSnapshotClient.OrderSnapshot(orderId, "PENDING_PAYMENT", 2599, "INR", 1));
+        when(gateway.createCheckout(any(), eq(orderId), eq(2599L), eq("INR"), anyString()))
+                .thenReturn(new PaymentGatewayAdapter.ProviderCheckout("cs_test_late", "https://checkout.test/late"));
+        PaymentAttempt attempt = payments.create(orderId, "user-late", "checkout-late", "Bearer test");
+
+        when(gateway.verifyWebhook("failed", "signature")).thenReturn(new PaymentGatewayAdapter.VerifiedWebhook(
+                "evt_failed", "checkout.session.expired", "cs_test_late", attempt.getId(),
+                PaymentGatewayAdapter.Outcome.FAILED));
+        when(gateway.verifyWebhook("succeeded", "signature")).thenReturn(new PaymentGatewayAdapter.VerifiedWebhook(
+                "evt_succeeded", "checkout.session.completed", "cs_test_late", attempt.getId(),
+                PaymentGatewayAdapter.Outcome.SUCCEEDED));
+
+        payments.handleWebhook("failed", "signature");
+        payments.handleWebhook("succeeded", "signature");
+
+        assertThat(attempts.findById(attempt.getId()).orElseThrow().getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(outbox.count()).isEqualTo(2);
+    }
+
+    @Test
+    void rejectsUnverifiedCallbackWithoutPersistingAnInboxRecord() throws Exception {
+        when(gateway.verifyWebhook("forged", "bad-signature"))
+                .thenThrow(new com.stripe.exception.SignatureVerificationException("invalid", "bad-signature"));
+
+        assertThatThrownBy(() -> payments.handleWebhook("forged", "bad-signature"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("400 BAD_REQUEST");
+
+        assertThat(callbacks.count()).isZero();
+        assertThat(outbox.count()).isZero();
+    }
 }

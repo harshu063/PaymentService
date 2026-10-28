@@ -91,7 +91,7 @@ public class PaymentAttempt {
     }
 
     public boolean succeed(Instant now) {
-        if (status == PaymentStatus.SUCCEEDED) {
+        if (status == PaymentStatus.SUCCEEDED || status == PaymentStatus.FAILED) {
             return false;
         }
         status = PaymentStatus.SUCCEEDED;

@@ -8,6 +8,7 @@ import com.example.paymentservice.repositories.PaymentAttemptRepository;
 import com.example.paymentservice.repositories.ProviderCallbackInboxRepository;
 import com.example.paymentservice.services.OrderSnapshotClient;
 import com.example.paymentservice.services.PaymentService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -36,6 +38,13 @@ class PaymentFlowTests {
     private ProviderCallbackInboxRepository callbacks;
     @Autowired
     private OutboxEventRepository outbox;
+
+    @BeforeEach
+    void clearPaymentState() {
+        callbacks.deleteAll();
+        outbox.deleteAll();
+        attempts.deleteAll();
+    }
 
     @MockitoBean
     private PaymentGatewayAdapter gateway;
@@ -58,6 +67,7 @@ class PaymentFlowTests {
         assertThat(attempts.count()).isEqualTo(1);
         assertThat(outbox.count()).isEqualTo(1);
         verify(gateway, times(1)).createCheckout(any(), eq(orderId), anyLong(), anyString(), anyString());
+        verify(orders, times(1)).get(orderId, "Bearer test");
 
         PaymentGatewayAdapter.VerifiedWebhook webhook = new PaymentGatewayAdapter.VerifiedWebhook(
                 "evt_1", "checkout.session.completed", "cs_test_1", first.getId(),
@@ -71,5 +81,54 @@ class PaymentFlowTests {
                 .isEqualTo(PaymentStatus.SUCCEEDED);
         assertThat(callbacks.count()).isEqualTo(1);
         assertThat(outbox.count()).isEqualTo(2);
+    }
+
+    @Test
+    void rejectsOrderThatIsNotAwaitingPaymentBeforeCreatingAnAttempt() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        when(orders.get(orderId, "Bearer test")).thenReturn(
+                new OrderSnapshotClient.OrderSnapshot(orderId, "CANCELLED", 2599, "INR", 2));
+
+        assertThatThrownBy(() -> payments.create(orderId, "user-cancelled", "checkout-cancelled", "Bearer test"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("409 CONFLICT");
+
+        assertThat(attempts.findBySubjectIdAndIdempotencyKey("user-cancelled", "checkout-cancelled"))
+                .isEmpty();
+        verify(gateway, times(0)).createCheckout(any(), any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void rejectsInvalidAuthoritativeOrderAmountsBeforeCreatingAnAttempt() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        when(orders.get(orderId, "Bearer test")).thenReturn(
+                new OrderSnapshotClient.OrderSnapshot(orderId, "PENDING_PAYMENT", 0, "INR", 1));
+
+        assertThatThrownBy(() -> payments.create(orderId, "user-invalid", "checkout-invalid", "Bearer test"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("502 BAD_GATEWAY");
+
+        assertThat(attempts.findBySubjectIdAndIdempotencyKey("user-invalid", "checkout-invalid"))
+                .isEmpty();
+        verify(gateway, times(0)).createCheckout(any(), any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void rejectsIdempotencyKeyReusedForAnotherOrder() throws Exception {
+        UUID firstOrderId = UUID.randomUUID();
+        UUID secondOrderId = UUID.randomUUID();
+        when(orders.get(firstOrderId, "Bearer test")).thenReturn(
+                new OrderSnapshotClient.OrderSnapshot(firstOrderId, "PENDING_PAYMENT", 2599, "INR", 1));
+        when(gateway.createCheckout(any(), eq(firstOrderId), eq(2599L), eq("INR"), anyString()))
+                .thenReturn(new PaymentGatewayAdapter.ProviderCheckout("cs_test_reuse", "https://checkout.test/reuse"));
+
+        PaymentAttempt first = payments.create(firstOrderId, "user-reuse", "same-idempotency-key", "Bearer test");
+
+        assertThatThrownBy(() -> payments.create(secondOrderId, "user-reuse", "same-idempotency-key", "Bearer test"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("409 CONFLICT");
+        assertThat(attempts.findById(first.getId())).isPresent();
+        verify(orders, times(0)).get(secondOrderId, "Bearer test");
+        verify(gateway, times(1)).createCheckout(any(), eq(firstOrderId), anyLong(), anyString(), anyString());
     }
 }

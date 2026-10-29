@@ -29,11 +29,11 @@ public class PaymentOutboxPublisher {
     }
 
     @Scheduled(fixedDelayString = "${payments.kafka.outbox.fixed-delay-ms}")
+    @Transactional
     public void publishPending() {
         publish(outbox.findTop50ByPublishedAtIsNullOrderByOccurredAtAsc());
     }
 
-    @Transactional
     void publish(List<OutboxEvent> events) {
         for (OutboxEvent event : events) {
             try {

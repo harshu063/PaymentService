@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.UUID;
 
@@ -36,6 +38,8 @@ class PaymentFlowTests {
     private ProviderCallbackInboxRepository callbacks;
     @Autowired
     private OutboxEventRepository outbox;
+    @Autowired
+    private JsonMapper objectMapper;
 
     @MockitoBean
     private PaymentGatewayAdapter gateway;
@@ -71,5 +75,27 @@ class PaymentFlowTests {
                 .isEqualTo(PaymentStatus.SUCCEEDED);
         assertThat(callbacks.count()).isEqualTo(1);
         assertThat(outbox.count()).isEqualTo(2);
+
+        JsonNode outcome = objectMapper.readTree(outbox.findAll().stream()
+                .filter(event -> event.getEventType().equals("payment.succeeded.v1"))
+                .findFirst()
+                .orElseThrow()
+                .getPayload());
+
+        assertThat(outcome.path("eventId").asText()).isNotBlank();
+        assertThat(outcome.path("eventType").asText()).isEqualTo("payment.succeeded.v1");
+        assertThat(outcome.path("schemaVersion").asInt()).isEqualTo(1);
+        assertThat(outcome.path("tenantId").asText()).isEqualTo("tenant-default");
+        assertThat(outcome.path("source").asText()).isEqualTo("payment-service");
+        assertThat(outcome.path("subject").path("type").asText()).isEqualTo("payment");
+        assertThat(outcome.path("subject").path("id").asText()).isEqualTo(first.getId().toString());
+        assertThat(outcome.path("orderingKey").asText()).isEqualTo("tenant-default:" + orderId);
+        assertThat(outcome.path("occurredAt").asText()).isNotBlank();
+        assertThat(outcome.path("correlationId").asText()).isEqualTo("checkout-1");
+        assertThat(outcome.path("causationId").asText()).isEqualTo("evt_1");
+        assertThat(outcome.path("payload").path("paymentId").asText()).isEqualTo(first.getId().toString());
+        assertThat(outcome.path("payload").path("orderId").asText()).isEqualTo(orderId.toString());
+        assertThat(outcome.path("payload").path("amountMinor").asLong()).isEqualTo(2599L);
+        assertThat(outcome.path("payload").path("currency").asText()).isEqualTo("INR");
     }
 }

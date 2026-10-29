@@ -48,4 +48,5 @@ public class OutboxEvent {
 
     public UUID getEventId() { return eventId; }
     public String getEventType() { return eventType; }
+    public String getPayload() { return payload; }
 }

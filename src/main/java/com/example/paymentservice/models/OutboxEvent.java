@@ -48,5 +48,7 @@ public class OutboxEvent {
 
     public UUID getEventId() { return eventId; }
     public String getEventType() { return eventType; }
+    public String getOrderingKey() { return orderingKey; }
     public String getPayload() { return payload; }
+    public void markPublished(Instant publishedAt) { this.publishedAt = publishedAt; }
 }
